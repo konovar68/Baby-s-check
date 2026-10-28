@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -81,6 +82,16 @@ private fun Diary(db: DiaryDb) {
             finally { busy = false }
         }
     }
+    val csvExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
+        val payload = pendingExport
+        pendingExport = null
+        if (uri != null && payload != null) scope.launch {
+            busy = true
+            try { withContext(Dispatchers.IO) { (context.contentResolver.openOutputStream(uri, "wt") ?: error("Не удалось открыть файл")).bufferedWriter(Charsets.UTF_8).use { it.write(payload) } }; notify("CSV сохранён") }
+            catch(e: Exception) { error = "Не удалось сохранить CSV: ${e.localizedMessage}" }
+            finally { busy = false }
+        }
+    }
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
             busy = true
@@ -104,9 +115,11 @@ private fun Diary(db: DiaryDb) {
         }
     }
     val entries = all.filter { date(it.start).toLocalDate() == day }
-    fun export(onlyDay: Boolean) {
-        pendingExport = TransferJson.encode(if (onlyDay) entries else all, profile)
-        exporter.launch("baby-check-${if(onlyDay) day.toString() else "all"}.json")
+    fun export(onlyDay: Boolean, csv: Boolean = false) {
+        val selected = if (onlyDay) entries else all
+        pendingExport = if(csv) TransferCsv.encode(selected, profile) else TransferJson.encode(selected, profile)
+        val name = "baby-check-${if(onlyDay) day.toString() else "all"}"
+        if(csv) csvExporter.launch("$name.csv") else exporter.launch("$name.json")
     }
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -116,8 +129,8 @@ private fun Diary(db: DiaryDb) {
             }
             TextButton(onClick = { showProfile = true }, enabled = !busy) { Text("Профиль") }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("Дневник", "Графики", "Данные").forEachIndexed { i, label -> FilterChip(selected = tab == i, onClick = { tab = i }, label = { Text(label) }) }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("Дневник", "Графики", "Прикорм", "Данные").forEachIndexed { i, label -> FilterChip(selected = tab == i, onClick = { tab = i }, label = { Text(label) }) }
         }
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         when (tab) {
@@ -127,9 +140,7 @@ private fun Diary(db: DiaryDb) {
                     TextButton(onClick = { val d = day; DatePickerDialog(context, { _, y, m, n -> day = LocalDate.of(y,m+1,n) },d.year,d.monthValue-1,d.dayOfMonth).show() }) { Text(day.format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))) }
                     TextButton(onClick = { day = day.plusDays(1) }) { Text("День ›") }
                 }
-                val dayStart = day.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                val dayEnd = day.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                val sleep = all.filter { it.kind == "Сон" }.sumOf { ((it.end ?: it.start).coerceAtMost(dayEnd) - it.start.coerceAtLeast(dayStart)).coerceAtLeast(0) }
+                val sleep = remember(all, day) { sleepDay(all, day).totalMs }
                 Text("Сон: ${duration(sleep)} · Кормлений: ${entries.count { it.kind in listOf("Грудное кормление", "Смесь", "Прикорм") }} · Подгузников: ${entries.count { it.kind == "Подгузник" }}", style = MaterialTheme.typography.bodySmall)
                 Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                     Column(Modifier.padding(12.dp)) {
@@ -172,6 +183,7 @@ private fun Diary(db: DiaryDb) {
                 }
             }
             1 -> Column(Modifier.verticalScroll(rememberScrollState())) {
+                SleepChart(all)
                 Text("Рост и вес", style = MaterialTheme.typography.titleLarge)
                 Text("Ваши измерения по датам; графики не являются медицинской оценкой.", style = MaterialTheme.typography.bodySmall)
                 listOf("Рост", "Вес").forEach { kind ->
@@ -191,11 +203,17 @@ private fun Diary(db: DiaryDb) {
                 Spacer(Modifier.height(24.dp))
             }
             2 -> Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                FoodHistoryView(all)
+            }
+            3 -> Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Данные на этом телефоне", style = MaterialTheme.typography.titleLarge)
                 Text("Записей: ${all.size}. Приложение работает без интернета. Сохраняйте JSON в надёжное место: удаление приложения удаляет локальную базу. Незавершённый таймер не экспортируется — завершите его перед переносом.")
                 Button(onClick = { export(false) }, enabled = !busy) { Text("Выгрузить все данные") }
                 Text("Выбранный день: $day. Событие относится к дню своего начала; полный экспорт включает всю историю.")
                 OutlinedButton(onClick = { export(true) }, enabled = !busy) { Text("Выгрузить выбранный день") }
+                OutlinedButton(onClick = { export(false, csv = true) }, enabled = !busy) { Text("CSV: вся история") }
+                OutlinedButton(onClick = { export(true, csv = true) }, enabled = !busy) { Text("CSV: выбранный день") }
+                Text("CSV — для просмотра в Excel и других таблицах. Для восстановления данных используйте JSON.", style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick = { importer.launch(arrayOf("application/json", "text/*", "application/octet-stream")) }, enabled = !busy) { Text("Загрузить JSON") }
                 Text("Импорт ничего не удаляет. Перед применением вы увидите количество изменений. При обновлении создаётся внутренняя резервная копия.")
                 OutlinedButton(onClick = { scope.launch {

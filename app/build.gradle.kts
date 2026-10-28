@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "ru.babycheck"
     compileSdk = 35
-    defaultConfig { applicationId = "ru.babycheck"; minSdk = 26; targetSdk = 35; versionCode = 2; versionName = "0.1.1"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "ru.babycheck"; minSdk = 26; targetSdk = 35; versionCode = 3; versionName = "0.2.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
